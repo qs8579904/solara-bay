@@ -1,169 +1,368 @@
-// The job list: six jobs to pay off a debt, of which this round ships the
-// first two. Each job has a briefing, a HUD objective, a target on the map
-// and a cash reward. A job is briefing, then active, then done or failed;
-// failing one sends the player back to its briefing to try again.
-import { MISSION0, MISSION1 } from './config.js';
+// The job board: six main jobs from Vince Kroll, in order, plus two repeatable side
+// gigs. Every job has a briefing, a HUD objective, a waypoint, a clock or a condition,
+// and a cash reward. Side gigs never block the main line.
+import { REWARDS, CAR } from './config.js';
 
-const MISSIONS = [
+const MAIN_DEFS = [
   {
-    name: 'First Delivery',
-    briefing: "Vince wants a package in the Marina. Don't keep him waiting.",
+    key: 'm1', name: 'First Job', giver: 'Vince Kroll', reward: REWARDS.m1,
+    brief: 'A package for the Marina. Drive it to the marked point before the clock runs out. No questions, no stops.',
     objective: 'Deliver the package to the Marina',
-    reward: MISSION0.reward,
+    fail: 'The package never arrived.',
   },
   {
-    name: 'Lobos Tail',
-    briefing: 'A Lobos sedan is running the Strip. Ram it until it stops.',
-    objective: 'Ram the Lobos car until it stops',
-    reward: MISSION1.reward,
+    key: 'm2', name: 'Lobos Lesson', giver: 'Vince Kroll', reward: REWARDS.m2,
+    brief: 'Los Lobos think the Strip is theirs. Ram their black car three times and remind them who drives this town.',
+    objective: 'Ram the black Lobos car 3 times',
+    fail: 'The Lobos car got away.',
+  },
+  {
+    key: 'm3', name: 'Lose the Cops', giver: 'Vince Kroll', reward: REWARDS.m3,
+    brief: 'Three stars, two cruisers, one Rook. Break line of sight and stay hidden until the heat dies to zero.',
+    objective: 'Lose the cops — break line of sight',
+    fail: 'The SBPD caught you.',
+  },
+  {
+    key: 'm4', name: 'Dock Pickup', giver: 'Vince Kroll', reward: REWARDS.m4,
+    brief: 'Pick up a friend at the Docks and drive them to the Old Town safehouse. Lobos will try to stop you. Keep the car alive.',
+    objective: 'Pick up the passenger at the Docks',
+    fail: 'The pickup fell through.',
+  },
+  {
+    key: 'm5', name: 'The Villa Car', giver: 'Vince Kroll', reward: REWARDS.m5,
+    brief: 'A gold coupe sits outside a Hills villa. Walk up, take it — the alarm will scream — and bring it to the Docks garage in one piece.',
+    objective: 'Steal the gold car at the Hills villa',
+    fail: 'The gold car was wrecked.',
+  },
+  {
+    key: 'm6', name: 'The Big Goodbye', giver: 'Vince Kroll', reward: REWARDS.m6,
+    brief: 'Last job. Grab the cash box on the Strip, lose a four-star tail, then run for the yacht at the Marina. Do this and the debt is done.',
+    objective: 'Grab the cash box on the Strip',
+    fail: 'The last job fell apart.',
   },
 ];
 
+const SIDE_DEFS = [
+  {
+    key: 'taxi', name: 'Cab Fare', giver: 'Dispatch', reward: REWARDS.taxi,
+    brief: 'A fare is waiting on the Strip. Pick them up, then drive them where the marker says. Quick feet, quick fare.',
+    objective: 'Pick up the fare',
+    fail: 'The fare walked away.',
+  },
+  {
+    key: 'medic', name: 'Urgent Call', giver: 'Dispatch', reward: REWARDS.medic,
+    brief: 'Someone needs a fast car, fast. Get to the marked point before the clock runs out. No time to explain.',
+    objective: 'Reach the call for help',
+    fail: 'You were too late.',
+  },
+];
+
+function randomRoadPoint(game) {
+  const x = game.rng.range(420, 2300);
+  const y = game.rng.range(140, 1660);
+  return game.city.nearestRoadPoint(x, y);
+}
+
 export function createMissions() {
-  return { index: 0, phase: 'briefing', timer: 0, briefUntil: 0, lobos: null, lobosHitCd: 0, done: false };
-}
+  const missions = {
+    unlocked: 0,
+    completed: [],
+    active: null,
+    sideCooldown: { taxi: 0, medic: 0 },
+  };
 
-export function missionName(state) {
-  if (state.mission.index >= MISSIONS.length) return null;
-  return MISSIONS[state.mission.index].name;
-}
-
-export function missionText(state) {
-  const m = state.mission;
-  if (m.index >= MISSIONS.length) return 'All jobs done — Solara Bay is yours.';
-  if (m.phase === 'briefing') return `${MISSIONS[m.index].name}: ${MISSIONS[m.index].briefing}`;
-  if (m.phase === 'failed') return `${MISSIONS[m.index].name}: failed — press Enter to retry.`;
-  return `${MISSIONS[m.index].name}: ${MISSIONS[m.index].objective}`;
-}
-
-// The map marker for the current job, or null when the job has no fixed point.
-export function missionTarget(state) {
-  const m = state.mission;
-  if (m.index === 0 && m.phase === 'active') return { x: MISSION0.target.x, y: MISSION0.target.y };
-  if (m.index === 1 && m.phase === 'active' && m.lobos) return { x: m.lobos.x, y: m.lobos.y };
-  return null;
-}
-
-function startJob(state) {
-  const m = state.mission;
-  m.phase = 'briefing';
-  m.briefUntil = state.time + 3;
-  m.timer = 0;
-  if (m.index === 1 && !m.lobos) {
-    const loop = MISSION1.loop;
-    state.cars.push({
-      kind: 'lobos',
-      x: loop[0].x,
-      y: loop[0].y,
-      angle: 0,
-      speed: 0,
-      targetSpeed: MISSION1.loopSpeed,
-      color: '#181818',
-      durability: MISSION1.targetHealth,
-      driver: true,
-      parked: false,
-      loopIndex: 1,
-      width: 46,
-      length: 22,
-    });
-    m.lobos = state.cars[state.cars.length - 1];
+  function findDef(key) {
+    return MAIN_DEFS.concat(SIDE_DEFS).find((d) => d.key === key);
   }
-}
 
-// The Lobos sedan runs its loop around the Strip, one waypoint at a time.
-function stepLobos(state, dt) {
-  const lobos = state.mission.lobos;
-  if (!lobos || lobos.durability <= 0) return;
-  const wp = MISSION1.loop[lobos.loopIndex % MISSION1.loop.length];
-  const dx = wp.x - lobos.x;
-  const dy = wp.y - lobos.y;
-  const d = Math.hypot(dx, dy);
-  if (d < 30) {
-    lobos.loopIndex += 1;
-    return;
-  }
-  lobos.angle = Math.atan2(dy, dx);
-  lobos.speed = MISSION1.loopSpeed;
-  lobos.x += (dx / d) * lobos.speed * dt;
-  lobos.y += (dy / d) * lobos.speed * dt;
-}
-
-// Returns 'complete' when a job pays out, 'fail' when one runs out of time.
-export function updateMissions(state, dt) {
-  const m = state.mission;
-  if (m.index >= MISSIONS.length) return null;
-  if (m.phase === 'briefing') {
-    if (state.time >= m.briefUntil) {
-      m.phase = 'active';
-      if (m.index === 0) m.timer = MISSION0.time;
+  function cleanupSpecial(game) {
+    const t = game.traffic.special;
+    for (let i = t.length - 1; i >= 0; i -= 1) {
+      if (t[i].missionCar) t.splice(i, 1);
     }
-    return null;
+    const p = game.traffic.parked;
+    for (let i = p.length - 1; i >= 0; i -= 1) {
+      if (p[i].isLuxury) p.splice(i, 1);
+    }
   }
-  if (m.phase === 'done') {
-    if (state.time >= m.briefUntil) {
-      m.index += 1;
-      if (m.index >= MISSIONS.length) {
-        m.done = true;
-        return null;
+
+  function startMain(index, game) {
+    const def = MAIN_DEFS[index];
+    if (!def) return null;
+    cleanupSpecial(game);
+    const active = { def, stage: 0, timer: 0, hits: 0, dwell: 0, ramCooldown: 0, data: {} };
+    if (def.key === 'm1') {
+      active.timer = 100;
+      active.data.target = game.city.points.marinaDrop;
+    } else if (def.key === 'm2') {
+      active.timer = 150;
+      const lobos = {
+        x: 1000, y: 930, angle: 0, speed: 0, color: '#191919', kind: 'lobos',
+        health: 1000, missionCar: true, noSteal: true, cruise: 250,
+      };
+      game.traffic.special.push(lobos);
+      active.data.lobos = lobos;
+    } else if (def.key === 'm3') {
+      active.timer = 150;
+      game.police.setWanted(game, 3);
+    } else if (def.key === 'm4') {
+      active.timer = 150;
+      active.data.pickup = game.city.points.docksPickup;
+      const hunter = {
+        x: 1700, y: 1230, angle: Math.PI, speed: 0, color: '#191919', kind: 'lobos',
+        health: 1000, missionCar: true, noSteal: true, cruise: 300,
+      };
+      game.traffic.special.push(hunter);
+      active.data.hunter = hunter;
+    } else if (def.key === 'm5') {
+      active.timer = 180;
+      const villa = game.city.points.hillsVilla;
+      const gold = game.traffic.addParked(villa.x, villa.y, -Math.PI / 2, '#d8a83c');
+      gold.isLuxury = true;
+      active.data.gold = gold;
+    } else if (def.key === 'm6') {
+      active.timer = 150;
+      active.data.cashPoint = game.city.points.stripCash;
+    }
+    missions.active = active;
+    return active;
+  }
+
+  function startSide(key, game) {
+    const def = findDef(key);
+    if (!def || missions.active) return null;
+    cleanupSpecial(game);
+    const active = { def, stage: 0, timer: 0, hits: 0, dwell: 0, ramCooldown: 0, data: {} };
+    if (key === 'taxi') {
+      active.timer = 110;
+      active.data.pickup = randomRoadPoint(game);
+      active.data.dest = randomRoadPoint(game);
+    } else if (key === 'medic') {
+      active.timer = 45;
+      active.data.help = randomRoadPoint(game);
+    }
+    missions.active = active;
+    return active;
+  }
+
+  function complete(game, def) {
+    cleanupSpecial(game);
+    if (MAIN_DEFS.some((d) => d.key === def.key)) {
+      const idx = MAIN_DEFS.findIndex((d) => d.key === def.key);
+      missions.unlocked = Math.max(missions.unlocked, idx + 1);
+      if (!missions.completed.includes(def.key)) missions.completed.push(def.key);
+    } else {
+      missions.sideCooldown[def.key] = 30;
+    }
+    missions.active = null;
+    game.onMissionComplete(def);
+  }
+
+  function fail(game, reason) {
+    const def = missions.active ? missions.active.def : null;
+    cleanupSpecial(game);
+    missions.active = null;
+    if (def) game.onMissionFailed(def, reason);
+  }
+
+  function dwellNear(game, dt, target, radius, need) {
+    const player = game.player;
+    const speed = player.car ? Math.abs(player.car.speed) : 0;
+    const d = Math.hypot(player.x - target.x, player.y - target.y);
+    const active = missions.active;
+    if (d < radius && speed < 60) {
+      active.dwell += dt;
+      return active.dwell >= need;
+    }
+    active.dwell = Math.max(0, active.dwell - dt);
+    return false;
+  }
+
+  function driveCar(game, car, tx, ty, speed, dt) {
+    const desired = Math.atan2(ty - car.y, tx - car.x);
+    let diff = desired - car.angle;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    car.angle += Math.max(-2.6 * dt, Math.min(2.6 * dt, diff));
+    car.speed += Math.max(-300 * dt, Math.min(280 * dt, speed - car.speed));
+    const fx = car.x + Math.cos(car.angle) * 24;
+    const fy = car.y + Math.sin(car.angle) * 24;
+    if (game.city.blocked(fx, fy, 15)) {
+      car.angle += 1.6 * dt * 3;
+      car.speed *= 0.7;
+      return;
+    }
+    car.x += Math.cos(car.angle) * car.speed * dt;
+    car.y += Math.sin(car.angle) * car.speed * dt;
+  }
+
+  function update(game, dt) {
+    for (const key of Object.keys(missions.sideCooldown)) {
+      missions.sideCooldown[key] = Math.max(0, missions.sideCooldown[key] - dt);
+    }
+    const active = missions.active;
+    if (!active) return;
+    active.ramCooldown = Math.max(0, active.ramCooldown - dt);
+    active.timer -= dt;
+    if (active.timer <= 0) {
+      fail(game, active.def.fail + ' (time ran out)');
+      return;
+    }
+    const key = active.def.key;
+    const player = game.player;
+    if (key === 'm1') {
+      const t = active.data.target;
+      if (Math.hypot(player.x - t.x, player.y - t.y) < 55) complete(game, active.def);
+    } else if (key === 'm2') {
+      const lobos = active.data.lobos;
+      if (lobos) {
+        // Flee: aim away from the player, down the road.
+        const away = Math.atan2(lobos.y - player.y, lobos.x - player.x);
+        driveCar(game, lobos, lobos.x + Math.cos(away) * 300, lobos.y + Math.sin(away) * 300, 250, dt);
       }
-      startJob(state);
-    }
-    return null;
-  }
-  if (m.phase !== 'active') return null;
-  if (m.index === 0) {
-    m.timer -= dt;
-    if (m.timer <= 0) {
-      m.phase = 'failed';
-      return 'fail';
-    }
-    const d = Math.hypot(state.player.x - MISSION0.target.x, state.player.y - MISSION0.target.y);
-    if (d < MISSION0.radius) {
-      state.player.cash += MISSION0.reward;
-      state.message = { text: `Delivered! +$${MISSION0.reward}`, until: state.time + 2.5 };
-      m.phase = 'done';
-      m.briefUntil = state.time + 2;
-      return 'complete';
-    }
-    return null;
-  }
-  // Mission 1: ram the Lobos car until it stops.
-  stepLobos(state, dt);
-  const lobos = m.lobos;
-  if (!lobos) return null;
-  if (m.lobosHitCd > 0) m.lobosHitCd -= dt;
-  const p = state.player;
-  if (!p.onFoot && p.car) {
-    const d = Math.hypot(p.car.x - lobos.x, p.car.y - lobos.y);
-    if (d < 52 && Math.abs(p.car.speed) > 150 && m.lobosHitCd <= 0 && lobos.durability > 0) {
-      m.lobosHitCd = MISSION1.hitCooldown;
-      lobos.durability -= MISSION1.hitDamage;
-      state.effects.push({ kind: 'debris', x: lobos.x, y: lobos.y, life: 0.8, max: 0.8, count: 6 });
-      if (lobos.durability <= 0) {
-        lobos.speed = 0;
-        state.player.cash += MISSION1.reward;
-        state.message = { text: `Lobos car stopped! +$${MISSION1.reward}`, until: state.time + 2.5 };
-        m.phase = 'done';
-        m.briefUntil = state.time + 2;
-        return 'complete';
+    } else if (key === 'm3') {
+      if (game.police.wanted === 0) complete(game, active.def);
+    } else if (key === 'm4') {
+      const hunter = active.data.hunter;
+      if (hunter) driveCar(game, hunter, player.x, player.y, 300, dt);
+      if (active.stage === 0) {
+        if (dwellNear(game, dt, active.data.pickup, 48, 1.5)) {
+          active.stage = 1;
+          active.timer = 120;
+          game.addMessage('Passenger aboard — get them to the safehouse!');
+          game.audio.pickup();
+        }
+      } else if (Math.hypot(player.x - game.city.points.safehouse.x, player.y - game.city.points.safehouse.y) < 55) {
+        complete(game, active.def);
       }
-      state.message = { text: 'Hit! Keep ramming the Lobos car.', until: state.time + 1.5 };
+    } else if (key === 'm5') {
+      if (active.stage === 0) {
+        // Waiting for the steal; the event moves it to stage 1.
+      } else if (Math.hypot(player.x - game.city.points.garage.x, player.y - game.city.points.garage.y) < 60) {
+        complete(game, active.def);
+      }
+      if (active.stage === 1 && player.car === active.data.gold && player.car.health <= 0) {
+        fail(game, active.def.fail);
+      }
+    } else if (key === 'm6') {
+      if (active.stage === 0) {
+        if (dwellNear(game, dt, active.data.cashPoint, 48, 1.5)) {
+          active.stage = 1;
+          active.timer = 150;
+          game.police.setWanted(game, 4);
+          game.addMessage('Cash grabbed — now lose a four-star tail!');
+        }
+      } else if (active.stage === 1) {
+        if (game.police.wanted === 0) {
+          active.stage = 2;
+          active.timer = 120;
+          game.addMessage('Tail lost — run for the yacht at the Marina!');
+        }
+      } else if (Math.hypot(player.x - game.city.points.yacht.x, player.y - game.city.points.yacht.y) < 60) {
+        complete(game, active.def);
+      }
+    } else if (key === 'taxi') {
+      if (active.stage === 0) {
+        if (dwellNear(game, dt, active.data.pickup, 48, 1.5)) {
+          active.stage = 1;
+          active.timer = 100;
+          game.addMessage('Fare aboard — drive to the marker.');
+          game.audio.pickup();
+        }
+      } else if (Math.hypot(player.x - active.data.dest.x, player.y - active.data.dest.y) < 55) {
+        complete(game, active.def);
+      }
+    } else if (key === 'medic') {
+      if (Math.hypot(player.x - active.data.help.x, player.y - active.data.help.y) < 50) {
+        complete(game, active.def);
+      }
     }
   }
-  return null;
-}
 
-// Retry the current job from its briefing after a failure.
-export function retryMission(state) {
-  const m = state.mission;
-  if (m.index === 1 && m.lobos) {
-    m.lobos.durability = MISSION1.targetHealth;
-    m.lobos.x = MISSION1.loop[0].x;
-    m.lobos.y = MISSION1.loop[0].y;
-    m.lobos.loopIndex = 1;
-    m.lobos.speed = 0;
+  function onEvent(type, game, data) {
+    const active = missions.active;
+    if (!active) return;
+    if (type === 'ram' && active.def.key === 'm2' && data && data.kind === 'lobos' && active.ramCooldown <= 0) {
+      active.ramCooldown = 1;
+      active.hits += 1;
+      game.addMessage('Hit ' + active.hits + ' of 3 on the Lobos car!');
+      game.audio.thud();
+      if (active.hits >= 3) complete(game, active.def);
+    } else if (type === 'luxuryStolen' && active.def.key === 'm5' && active.stage === 0) {
+      active.stage = 1;
+      active.timer = 180;
+      game.addMessage('Drive the gold car to the Docks garage!');
+    }
   }
-  startJob(state);
-}
 
-export { startJob };
+  function objectiveText() {
+    const active = missions.active;
+    if (!active) return '';
+    const key = active.def.key;
+    if (key === 'm4' && active.stage === 1) return 'Drive the passenger to the Old Town safehouse';
+    if (key === 'm5' && active.stage === 1) return 'Drive the gold car to the Docks garage';
+    if (key === 'm6' && active.stage === 1) return 'Lose the 4-star tail';
+    if (key === 'm6' && active.stage === 2) return 'Run for the yacht at the Marina';
+    if (key === 'taxi' && active.stage === 1) return 'Drive the fare to the destination';
+    return active.def.objective;
+  }
+
+  function waypoint(game) {
+    const active = missions.active;
+    if (!active) return null;
+    const key = active.def.key;
+    const city = game.city;
+    if (key === 'm1') return { x: active.data.target.x, y: active.data.target.y };
+    if (key === 'm2' && active.data.lobos) return { x: active.data.lobos.x, y: active.data.lobos.y };
+    if (key === 'm3') return null;
+    if (key === 'm4') return active.stage === 0 ? active.data.pickup : city.points.safehouse;
+    if (key === 'm5') return active.stage === 0 ? city.points.hillsVilla : city.points.garage;
+    if (key === 'm6') {
+      if (active.stage === 0) return active.data.cashPoint;
+      if (active.stage === 1) return null;
+      return city.points.yacht;
+    }
+    if (key === 'taxi') return active.stage === 0 ? active.data.pickup : active.data.dest;
+    if (key === 'medic') return active.data.help;
+    return null;
+  }
+
+  function progress(game) {
+    const active = missions.active;
+    if (!active) return null;
+    if (active.def.key === 'm3') return { label: 'Heat', value: 1 - game.police.wanted / 3 };
+    if (active.def.key === 'm2') return { label: 'Hits', value: active.hits / 3 };
+    return null;
+  }
+
+  function canStartMain(game) {
+    if (missions.active || missions.unlocked >= MAIN_DEFS.length) return null;
+    const bar = game.city.points.bar;
+    if (Math.hypot(game.player.x - bar.x, game.player.y - bar.y) < 100) return missions.unlocked;
+    return null;
+  }
+
+  function nearSide(game) {
+    if (missions.active) return null;
+    const player = game.player;
+    if (missions.sideCooldown.taxi <= 0 && Math.hypot(player.x - game.city.points.taxiStand.x, player.y - game.city.points.taxiStand.y) < 80) return 'taxi';
+    if (missions.sideCooldown.medic <= 0 && Math.hypot(player.x - game.city.points.medicPoint.x, player.y - game.city.points.medicPoint.y) < 80) return 'medic';
+    return null;
+  }
+
+  // One object, methods attached: the caller reads active/unlocked off the same
+  // object the update loop mutates, so the HUD never sees a stale copy.
+  missions.MAIN_DEFS = MAIN_DEFS;
+  missions.SIDE_DEFS = SIDE_DEFS;
+  missions.startMain = startMain;
+  missions.startSide = startSide;
+  missions.update = update;
+  missions.onEvent = onEvent;
+  missions.objectiveText = objectiveText;
+  missions.waypoint = waypoint;
+  missions.progress = progress;
+  missions.canStartMain = canStartMain;
+  missions.nearSide = nearSide;
+  missions.findDef = findDef;
+  return missions;
+}

@@ -1,45 +1,41 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot
-// presses (confirm, pause, steal) are queued as bit flags and taken once by
-// the loop, so a press between two frames is never lost and never counted
-// twice. A key released while the tab is hidden never sends keyup, so blur
-// lets go of everything.
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_STEAL = 4;
+// Keyboard input. Held keys steer and drive; one-shot presses (steal, punch, pause,
+// side jobs, mute) are queued as edges and taken once, so a press between two frames
+// is never lost and never counted twice. The screenshot scenes steer through the same
+// input by injecting virtual keys.
+const AXIS = {
+  up: ['KeyW', 'ArrowUp'],
+  down: ['KeyS', 'ArrowDown'],
+  left: ['KeyA', 'ArrowLeft'],
+  right: ['KeyD', 'ArrowRight'],
+  run: ['ShiftLeft', 'ShiftRight'],
+  handbrake: ['Space'],
+};
+const EDGE = {
+  steal: ['KeyE'],
+  punch: ['KeyJ'],
+  side: ['KeyT'],
+  mute: ['KeyM'],
+  pause: ['KeyP', 'Escape'],
+  confirm: ['Enter'],
+};
+const CODE_TO_EDGE = {};
+for (const [action, codes] of Object.entries(EDGE)) {
+  for (const code of codes) CODE_TO_EDGE[code] = action;
+}
+const GAME_CODES = new Set(Object.values(AXIS).flat().concat(Object.values(EDGE).flat()));
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const UP = new Set(['ArrowUp', 'KeyW']);
-const DOWN = new Set(['ArrowDown', 'KeyS']);
-const RUN = new Set(['ShiftLeft', 'ShiftRight']);
-const BRAKE = new Set(['Space']);
-const CONFIRM = new Set(['Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-const STEAL = new Set(['KeyE']);
-const PUNCH = new Set(['KeyJ']);
-
-export function createInput(target) {
+export function createInput(canvas) {
   const held = new Set();
-  let actions = 0;
+  const edges = new Set();
+  const virtual = { up: false, down: false, left: false, right: false, handbrake: false, run: false };
 
   window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code) || RIGHT.has(event.code) || UP.has(event.code) || DOWN.has(event.code)
-      || RUN.has(event.code) || BRAKE.has(event.code) || PUNCH.has(event.code)) {
-      held.add(event.code);
-    }
-    if (CONFIRM.has(event.code) || BRAKE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    }
-    if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    }
-    if (STEAL.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_STEAL;
-    }
-    if (LEFT.has(event.code) || RIGHT.has(event.code) || UP.has(event.code) || DOWN.has(event.code)
-      || BRAKE.has(event.code) || CONFIRM.has(event.code)) {
-      event.preventDefault();
-    }
+    if (!GAME_CODES.has(event.code)) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    held.add(event.code);
+    const action = CODE_TO_EDGE[event.code];
+    if (action) edges.add(action);
   });
   window.addEventListener('keyup', (event) => {
     held.delete(event.code);
@@ -47,38 +43,53 @@ export function createInput(target) {
   window.addEventListener('blur', () => {
     held.clear();
   });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+  canvas.addEventListener('pointerdown', () => {
+    edges.add('confirm');
   });
 
-  function any(set) {
-    for (const code of set) if (held.has(code)) return true;
-    return false;
+  function down(name) {
+    if (virtual[name]) return true;
+    return AXIS[name].some((code) => held.has(code));
   }
 
   return {
-    // -1 left, 1 right, 0 neither or both.
-    moveX() {
-      return (any(RIGHT) ? 1 : 0) - (any(LEFT) ? 1 : 0);
+    isDown(name) {
+      return down(name);
     },
-    // -1 up, 1 down, 0 neither or both.
-    moveY() {
-      return (any(DOWN) ? 1 : 0) - (any(UP) ? 1 : 0);
+    axisX() {
+      return (down('right') ? 1 : 0) - (down('left') ? 1 : 0);
+    },
+    axisY() {
+      return (down('down') ? 1 : 0) - (down('up') ? 1 : 0);
     },
     run() {
-      return any(RUN);
+      return down('run');
     },
-    handbrake() {
-      return any(BRAKE);
+    // Take a one-shot press, once.
+    consume(action) {
+      if (edges.has(action)) {
+        edges.delete(action);
+        return true;
+      }
+      return false;
     },
-    punch() {
-      return any(PUNCH);
+    // Any key at all, for dismissing briefings and result screens.
+    anyPressed() {
+      if (edges.size > 0) {
+        edges.clear();
+        return true;
+      }
+      return false;
     },
-    // The one-shot presses since the last call, as ACTION_* flags.
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+    clearEdges() {
+      edges.clear();
+    },
+    // The screenshot autopilot steers through here.
+    setVirtual(next) {
+      Object.assign(virtual, next);
+    },
+    clearVirtual() {
+      for (const key of Object.keys(virtual)) virtual[key] = false;
     },
   };
 }
