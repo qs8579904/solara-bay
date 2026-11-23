@@ -4,6 +4,8 @@
 [![rank](https://make.fun/badge/gta6-01/qs8579904/solara-bay/rank.svg)](https://make.fun/bounty/gta6-01)
 [![reward](https://make.fun/badge/gta6-01/qs8579904/solara-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
+v2 — six main jobs, two repeatable side gigs, synthesized WebAudio sound, and fixed seawater collision.
+
 A sunny 2D top-down open-world getaway game, built for the
 [make.fun GTA 6 bounty](https://make.fun/bounty/gta6-01). You are Mara "Rook"
 Delgado, a former getaway driver in the fictional seaside city of Solara Bay.
