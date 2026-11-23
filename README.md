@@ -1,8 +1,8 @@
 # Solara Bay
 
-[![make.fun bounty](https://make.fun/bounty/gta6-01/badge.svg)](https://make.fun/bounty/gta6-01)
-[![rank](https://make.fun/repos/qs8579904/solara-bay/rank.svg)](https://make.fun/bounty/gta6-01)
-[![reward](https://make.fun/repos/qs8579904/solara-bay/reward.svg)](https://make.fun/bounty/gta6-01)
+[![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/qs8579904/solara-bay/rank.svg)](https://make.fun/bounty/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/qs8579904/solara-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
 A sunny 2D top-down open-world getaway game, built for the
 [make.fun GTA 6 bounty](https://make.fun/bounty/gta6-01). You are Mara "Rook"
